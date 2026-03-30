@@ -111,20 +111,32 @@ async def lifespan(app: FastAPI):
     Handles startup and shutdown of the application.
     """
     # Startup
+    logger.info("=" * 60)
+    logger.info("FastAPI Application Starting")
+    logger.info("=" * 60)
     logger.info("Starting Binance listener...")
     binance_listener.subscribe(binance_update_handler)
 
     # Start Binance listener in background
     global binance_task
     binance_task = asyncio.create_task(
-        binance_listener.connect_and_listen(symbols=["btcusdt", "ethusdt", "bnbusdt"])
+        binance_listener.connect_and_listen(symbols=["btcusdt", "ethusdt"])
     )
-    logger.info("Binance listener started")
+    logger.info("Binance listener task created")
+    
+    # Give it a moment to fetch initial prices
+    await asyncio.sleep(1)
+    
+    current_prices = binance_listener.get_current_prices()
+    logger.info(f"Current prices available: {list(current_prices.keys())}")
+    logger.info("=" * 60)
 
     yield
 
     # Shutdown
-    logger.info("Shutting down...")
+    logger.info("=" * 60)
+    logger.info("Application Shutting Down")
+    logger.info("=" * 60)
     if binance_task:
         binance_task.cancel()
         try:
@@ -133,6 +145,7 @@ async def lifespan(app: FastAPI):
             pass
     await binance_listener.stop()
     logger.info("Application shutdown complete")
+    logger.info("=" * 60)
 
 
 # Create FastAPI application

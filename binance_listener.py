@@ -20,7 +20,7 @@ class BinanceListener:
     def __init__(self):
         self.current_prices: Dict[str, Any] = {}
         self.subscribers: Set[Callable] = set()
-        self.ws_session = None
+        self.session: aiohttp.ClientSession = None  # Persistent session
         self.running = False
         self.binance_endpoint = "wss://stream.binance.com:9443/ws"
         self.unavailable_symbols: Set[str] = set()  # Track symbols that return 451
@@ -50,6 +50,7 @@ class BinanceListener:
         """
         Poll Binance REST API for ticker data (Vercel-compatible).
         Uses REST API instead of WebSocket to work on serverless platforms.
+        Reuses a persistent ClientSession for better performance on Vercel.
         
         Args:
             symbols: List of symbols to listen to (e.g., ['btcusdt', 'ethusdt'])
@@ -62,48 +63,67 @@ class BinanceListener:
 
         # Convert symbols to uppercase for REST API
         rest_symbols = [s.upper() for s in symbols]
-
-        while self.running:
-            try:
-                async with aiohttp.ClientSession() as session:
-                    self.ws_session = session
-                    
-                    # Fetch ticker data for each symbol
-                    for symbol in rest_symbols:
-                        # Skip symbols that are unavailable (451 error)
-                        if symbol in self.unavailable_symbols:
-                            continue
-                        
-                        try:
-                            # Use Binance REST API to get 24h ticker data
-                            url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
-                            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                                if response.status == 200:
-                                    data = await response.json()
-                                    self._process_rest_price_update(data)
-                                elif response.status == 451:
-                                    # Region/geo-blocked symbol - mark as unavailable and skip
-                                    logger.warning(f"Binance API blocked (451) for {symbol} - skipping this symbol")
-                                    self.unavailable_symbols.add(symbol)
-                                else:
-                                    logger.warning(f"Binance API returned status {response.status} for {symbol}")
-                        except asyncio.TimeoutError:
-                            logger.warning(f"Timeout fetching {symbol} from Binance")
-                        except Exception as e:
-                            logger.error(f"Error fetching {symbol} ticker: {e}")
-                    
+        
+        # Create persistent session (not recreated every poll)
+        self.session = aiohttp.ClientSession()
+        logger.info(f"Created persistent HTTP session")
+        
+        try:
+            # Initial fetch before polling loop
+            logger.info("Attempting initial price fetch...")
+            await self._fetch_all_prices(rest_symbols)
+            
+            # Then continue polling
+            while self.running:
+                try:
+                    await self._fetch_all_prices(rest_symbols)
                     # Poll every 2 seconds
                     await asyncio.sleep(2)
-
-            except asyncio.CancelledError:
-                logger.info("Binance listener cancelled")
-                self.running = False
-                break
+                except asyncio.CancelledError:
+                    logger.info("Binance listener cancelled")
+                    self.running = False
+                    break
+                except Exception as e:
+                    logger.error(f"Error fetching prices: {e}")
+                    await asyncio.sleep(2)  # Brief delay before retry
+        finally:
+            # Cleanup session
+            if self.session and not self.session.closed:
+                await self.session.close()
+                logger.info("Closed HTTP session")
+    
+    async def _fetch_all_prices(self, symbols: list) -> None:
+        """Fetch prices for all symbols in a single operation."""
+        if not self.session or self.session.closed:
+            logger.warning("Session is closed, skipping fetch")
+            return
+            
+        for symbol in symbols:
+            # Skip symbols that are unavailable (451 error)
+            if symbol in self.unavailable_symbols:
+                continue
+            
+            try:
+                # Use Binance REST API to get 24h ticker data
+                url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
+                async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                    if response.status == 200:
+                        try:
+                            data = await response.json()
+                            self._process_rest_price_update(data)
+                            logger.debug(f"Successfully fetched {symbol}")
+                        except Exception as e:
+                            logger.error(f"Error parsing JSON for {symbol}: {e}")
+                    elif response.status == 451:
+                        # Region/geo-blocked symbol - mark as unavailable and skip
+                        logger.warning(f"Binance API blocked (451) for {symbol} - skipping")
+                        self.unavailable_symbols.add(symbol)
+                    else:
+                        logger.warning(f"Binance API status {response.status} for {symbol}")
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout fetching {symbol}")
             except Exception as e:
-                logger.error(f"Error in Binance polling: {e}")
-                if self.running:
-                    logger.info("Retrying in 5 seconds...")
-                    await asyncio.sleep(5)
+                logger.error(f"Error fetching {symbol}: {e}")
 
     def _process_price_update(self, data: Dict[str, Any]) -> None:
         """
@@ -186,8 +206,8 @@ class BinanceListener:
     async def stop(self) -> None:
         """Stop polling Binance REST API."""
         self.running = False
-        if self.ws_session:
-            await self.ws_session.close()
+        if self.session and not self.session.closed:
+            await self.session.close()
         logger.info("Binance listener stopped")
 
 
