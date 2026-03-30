@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 
 class BinanceListener:
     """
-    Connects to Binance WebSocket API and maintains real-time price data.
+    Polls Binance REST API for ticker data and maintains real-time price data.
+    Uses REST API polling instead of WebSocket to work on serverless platforms like Vercel.
     Notifies subscribers of price updates.
     """
 
@@ -46,7 +47,8 @@ class BinanceListener:
 
     async def connect_and_listen(self, symbols: list = None) -> None:
         """
-        Connect to Binance WebSocket and listen for price updates.
+        Poll Binance REST API for ticker data (Vercel-compatible).
+        Uses REST API instead of WebSocket to work on serverless platforms.
         
         Args:
             symbols: List of symbols to listen to (e.g., ['btcusdt', 'ethusdt'])
@@ -54,42 +56,44 @@ class BinanceListener:
         if symbols is None:
             symbols = ["btcusdt"]
 
-        # Build the stream URL with multiple symbols
-        streams = [f"{symbol}@ticker" for symbol in symbols]
-        stream_url = f"{self.binance_endpoint}/{'/'.join(streams)}"
-
         self.running = True
-        logger.info(f"Connecting to Binance WebSocket: {stream_url}")
+        logger.info(f"Starting Binance ticker polling for: {symbols}")
+
+        # Convert symbols to uppercase for REST API
+        rest_symbols = [s.upper() for s in symbols]
 
         while self.running:
             try:
                 async with aiohttp.ClientSession() as session:
                     self.ws_session = session
-                    async with session.ws_connect(stream_url) as ws:
-                        logger.info("Connected to Binance WebSocket")
-                        
-                        async for msg in ws:
-                            if msg.type == aiohttp.WSMsgType.TEXT:
-                                try:
-                                    data = json.loads(msg.data)
-                                    self._process_price_update(data)
-                                except json.JSONDecodeError as e:
-                                    logger.error(f"Error parsing message: {e}")
-                            elif msg.type == aiohttp.WSMsgType.ERROR:
-                                logger.error(f"WebSocket error: {ws.exception()}")
-                                break
-                            elif msg.type == aiohttp.WSMsgType.CLOSED:
-                                logger.info("WebSocket connection closed")
-                                break
+                    
+                    # Fetch ticker data for each symbol
+                    for symbol in rest_symbols:
+                        try:
+                            # Use Binance REST API to get 24h ticker data
+                            url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
+                            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                                if response.status == 200:
+                                    data = await response.json()
+                                    self._process_rest_price_update(data)
+                                else:
+                                    logger.warning(f"Binance API returned status {response.status} for {symbol}")
+                        except asyncio.TimeoutError:
+                            logger.warning(f"Timeout fetching {symbol} from Binance")
+                        except Exception as e:
+                            logger.error(f"Error fetching {symbol} ticker: {e}")
+                    
+                    # Poll every 2 seconds
+                    await asyncio.sleep(2)
 
             except asyncio.CancelledError:
                 logger.info("Binance listener cancelled")
                 self.running = False
                 break
             except Exception as e:
-                logger.error(f"Error connecting to Binance: {e}")
+                logger.error(f"Error in Binance polling: {e}")
                 if self.running:
-                    logger.info("Reconnecting in 5 seconds...")
+                    logger.info("Retrying in 5 seconds...")
                     await asyncio.sleep(5)
 
     def _process_price_update(self, data: Dict[str, Any]) -> None:
@@ -132,6 +136,36 @@ class BinanceListener:
         except (KeyError, ValueError) as e:
             logger.error(f"Error processing price update: {e}")
 
+    def _process_rest_price_update(self, data: Dict[str, Any]) -> None:
+        """
+        Process price data from Binance REST API.
+        
+        REST API format is different from WebSocket format.
+        """
+        try:
+            symbol = data.get("symbol", "UNKNOWN")  # e.g., "BTCUSDT"
+            last_price = float(data.get("lastPrice", 0))
+            price_24h_change = float(data.get("priceChangePercent", 0))
+            timestamp = int(data.get("closeTime", 0))
+
+            processed_data = {
+                "symbol": symbol,
+                "last_price": last_price,
+                "24h_change": price_24h_change,
+                "timestamp": datetime.fromtimestamp(timestamp / 1000).isoformat(),
+            }
+
+            # Update current prices
+            self.current_prices[symbol] = processed_data
+
+            # Notify subscribers
+            asyncio.create_task(self.notify_subscribers(processed_data))
+
+            logger.debug(f"Updated {symbol}: ${last_price} (24h: {price_24h_change}%)")
+
+        except (KeyError, ValueError) as e:
+            logger.error(f"Error processing REST price update: {e}")
+
     def get_current_prices(self) -> Dict[str, Any]:
         """Get all current prices."""
         return self.current_prices.copy()
@@ -141,7 +175,7 @@ class BinanceListener:
         return self.current_prices.get(symbol)
 
     async def stop(self) -> None:
-        """Stop listening to Binance WebSocket."""
+        """Stop polling Binance REST API."""
         self.running = False
         if self.ws_session:
             await self.ws_session.close()

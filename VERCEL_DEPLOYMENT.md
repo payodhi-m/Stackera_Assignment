@@ -5,20 +5,21 @@ This application has been modified to be compatible with Vercel's deployment pla
 
 ## Key Changes for Vercel Compatibility
 
-### 1. **Polling-Based Dashboard**
-   - The HTML dashboard now uses `fetch()` to call the `/price` endpoint every 2 seconds
+### 1. **REST API Polling Instead of WebSocket**
+   - The BinanceListener now polls Binance's REST API every 2 seconds instead of maintaining a persistent WebSocket connection
+   - Vercel's serverless platform blocks long-lived persistent connections (Error 451)
+   - REST API calls work perfectly and prices update every 2 seconds
+   - Uses the `https://api.binance.com/api/v3/ticker/24hr` endpoint
+
+### 2. **Polling-Based Dashboard**
+   - The HTML dashboard uses `fetch()` to call the `/price` endpoint every 2 seconds
    - Status shows "Polling API" instead of "Connected to WebSocket"
    - Same real-time price display, just with 2-second update delays
 
-### 2. **Environment Variable Support**
+### 3. **Environment Variable Support**
    - Application now reads `PORT` from environment variables
    - Vercel automatically sets PORT dynamically
    - Fallback: defaults to 8000 if PORT not set
-
-### 3. **Configuration Files**
-   - `vercel.json`: Tells Vercel how to build and run the Python application
-   - `Procfile`: Specifies the startup command
-   - `.vercelignore`: Lists files to exclude from deployment
 
 ## Deployment Steps
 
@@ -100,6 +101,7 @@ After deployment:
 
 - **Vercel Python Docs**: https://vercel.com/docs/runtimes/python
 - **FastAPI on Vercel**: https://vercel.com/docs/solutions/python-frameworks
+
 
 ---
 
