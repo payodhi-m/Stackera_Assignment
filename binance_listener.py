@@ -23,6 +23,7 @@ class BinanceListener:
         self.ws_session = None
         self.running = False
         self.binance_endpoint = "wss://stream.binance.com:9443/ws"
+        self.unavailable_symbols: Set[str] = set()  # Track symbols that return 451
 
     def subscribe(self, callback: Callable) -> None:
         """Subscribe a callback function to price updates."""
@@ -69,6 +70,10 @@ class BinanceListener:
                     
                     # Fetch ticker data for each symbol
                     for symbol in rest_symbols:
+                        # Skip symbols that are unavailable (451 error)
+                        if symbol in self.unavailable_symbols:
+                            continue
+                        
                         try:
                             # Use Binance REST API to get 24h ticker data
                             url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
@@ -76,6 +81,10 @@ class BinanceListener:
                                 if response.status == 200:
                                     data = await response.json()
                                     self._process_rest_price_update(data)
+                                elif response.status == 451:
+                                    # Region/geo-blocked symbol - mark as unavailable and skip
+                                    logger.warning(f"Binance API blocked (451) for {symbol} - skipping this symbol")
+                                    self.unavailable_symbols.add(symbol)
                                 else:
                                     logger.warning(f"Binance API returned status {response.status} for {symbol}")
                         except asyncio.TimeoutError:

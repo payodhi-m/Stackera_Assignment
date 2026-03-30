@@ -238,33 +238,44 @@ async def get():
     </head>
     <body>
         <div class="container">
-            <h1>🚀 Crypto Price Dashboard</h1>
+            <h1>Crypto Price Dashboard</h1>
             <div id="status" class="disconnected">Connecting...</div>
             <div id="prices"></div>
             <div class="update-info">
-                📡 Polling API (Updates every 2 seconds)
+                Polling API (Updates every 2 seconds)
             </div>
         </div>
 
         <script>
             const statusDiv = document.getElementById('status');
             const pricesDiv = document.getElementById('prices');
-            let isConnected = true;
 
-            async function fetchPrices() {
+            // Fetch immediately
+            statusDiv.textContent = 'Connecting to API...';
+            statusDiv.className = 'disconnected';
+
+            
+            async function fetchWithRetry() {
                 try {
                     const response = await fetch('/price');
-                    
                     if (!response.ok) {
                         throw new Error(`HTTP ${response.status}`);
                     }
-                    
                     const data = await response.json();
                     
-                    // Update status
-                    if (!isConnected) {
-                        isConnected = true;
-                        statusDiv.textContent = '✓ Connected to API (Polling every 2s)';
+                    // Check if we got any prices
+                    const priceCount = Object.keys(data.latest_prices || {}).length;
+                    if (priceCount === 0) {
+                        throw new Error('No prices available yet');
+                    }
+                    
+                    // Success - update status based on price count
+                    const expectedSymbols = 3; // BTC, ETH, BNB
+                    if (priceCount >= 2) {
+                        statusDiv.textContent = `Connected to API (${priceCount} symbols, Polling every 2s)`;
+                        statusDiv.className = 'connected';
+                    } else {
+                        statusDiv.textContent = `Connected to API (${priceCount}/${expectedSymbols} symbols available)`;  
                         statusDiv.className = 'connected';
                     }
                     
@@ -272,18 +283,15 @@ async def get():
                     const prices = data.latest_prices || {};
                     for (const [symbol, priceData] of Object.entries(prices)) {
                         let priceCard = document.getElementById('card-' + symbol);
-                        
                         if (!priceCard) {
                             priceCard = document.createElement('div');
                             priceCard.id = 'card-' + symbol;
                             priceCard.className = 'price-card';
                             pricesDiv.appendChild(priceCard);
                         }
-
                         const change = parseFloat(priceData['24h_change']);
                         const changeClass = change >= 0 ? 'positive' : 'negative';
                         const changeSign = change >= 0 ? '+' : '';
-
                         priceCard.innerHTML = `
                             <div class="symbol">${priceData.symbol}</div>
                             <div class="price">$${parseFloat(priceData.last_price).toFixed(2)}</div>
@@ -291,24 +299,16 @@ async def get():
                             <div class="timestamp">Last updated: ${new Date(priceData.timestamp).toLocaleTimeString()}</div>
                         `;
                     }
-                    
                 } catch (error) {
                     console.error('Error fetching prices:', error);
-                    if (isConnected) {
-                        isConnected = false;
-                        statusDiv.textContent = '✗ Connection Error - Retrying...';
-                        statusDiv.className = 'disconnected';
-                    }
+                    statusDiv.textContent = 'Connection Error - Retrying...';
+                    statusDiv.className = 'disconnected';
                 }
             }
-
-            // Fetch immediately
-            statusDiv.textContent = '⏳ Connecting to API...';
-            statusDiv.className = 'disconnected';
-            fetchPrices();
             
+            fetchWithRetry();
             // Then poll every 2 seconds
-            const pollInterval = setInterval(fetchPrices, 2000);
+            const pollInterval = setInterval(fetchWithRetry, 2000);
         </script>
     </body>
     </html>
