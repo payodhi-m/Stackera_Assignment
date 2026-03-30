@@ -2,18 +2,21 @@
 
 A Python application that connects to Binance's public WebSocket API to listen to live cryptocurrency prices and broadcasts them to multiple clients in real-time through a FastAPI WebSocket server.
 
+**NEW: Vercel-Compatible Polling Mode** - The dashboard now uses polling for compatibility with Vercel and other platforms that don't support WebSocket.
+
 ## Features
 
 - **Connects to Binance WebSocket API** - Real-time price updates for BTC/USDT, ETH/USDT and BNB/USDT
 - **FastAPI WebSocket Server** - Lightweight, high-performance local server
 - **Multi-client Support** - Multiple clients can connect simultaneously (with connection limits)
 - **Data Persistence** - Stores symbol, last price, 24h change, and timestamp
-- **Web UI** - HTML client included for easy testing
+- **Web UI** - HTML Polling Dashboard (Vercel-compatible) included for easy testing
 - **Graceful Disconnection** - Handles client disconnections gracefully
 - **REST API** - Multiple endpoints to fetch current prices via HTTP
 - **Rate Limiting** - 30 requests per minute per IP address
 - **Connection Limiting** - Max 100 concurrent WebSocket connections (configurable)
 - **Asyncio Message Queue** - Efficient async message management with queue processing
+- **Vercel Deployable** - Configuration files included for Vercel deployment
 
 ## Project Structure
 
@@ -96,6 +99,28 @@ This will connect to the WebSocket and display price updates in the terminal.
 
 Get current prices via HTTP. Both endpoints support **rate limiting (30 requests/minute)**:
 
+## Deployment
+
+### Local Development
+Follow the Installation and Usage sections above to run locally on `http://localhost:8000`
+
+### Production Deployment
+
+#### Vercel
+Deploy to Vercel with zero configuration (Vercel-compatible polling dashboard included):
+```bash
+npm install -g vercel
+vercel
+```
+
+- Free tier available
+- Automatic HTTPS
+- Global CDN
+- Environment variables supported
+- Polling mode (2-second update delay instead of real-time WebSocket)
+
+
+
 #### Endpoint 1: `/prices` (Simple)
 ```bash
 curl http://localhost:8000/prices
@@ -152,7 +177,7 @@ Response includes prices **plus connection statistics**:
 
 - **BinanceListener class**: Manages connection to Binance WebSocket
 - Connects to: `wss://stream.binance.com:9443/ws`
-- Listens to: `btcusdt@ticker`,  `ethusdt@ticker` and bnbusdt@ticker streams
+- Listens to: `btcusdt@ticker`,  `ethusdt@ticker` and `bnbusdt@ticker` streams
 - Extracts: Symbol, last price, 24h change %, timestamp
 - Features:
   - Automatic reconnection on failure
@@ -189,7 +214,6 @@ Response includes prices **plus connection statistics**:
 - **Benefits**: No message loss, non-blocking delivery, auto-cleanup of disconnected clients
 - **Performance**: <1ms per message processing
 
-For detailed information, see [API_ENHANCEMENTS.md](API_ENHANCEMENTS.md)
 
 ## Data Flow
 

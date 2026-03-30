@@ -1,5 +1,7 @@
 import asyncio
+import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -10,6 +12,9 @@ from binance_listener import binance_listener
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Get port from environment variable (for Vercel/Railway/etc)
+PORT = int(os.environ.get("PORT", 8000))
 
 # Configuration
 MAX_CONNECTIONS = 100  # Maximum concurrent WebSocket connections
@@ -147,7 +152,7 @@ async def rate_limit_exception_handler(request: Request, exc: RateLimitExceeded)
 
 @app.get("/")
 async def get():
-    """Serve a simple HTML client to test the WebSocket."""
+    """Serve a simple HTML client with polling for Vercel compatibility."""
     return HTMLResponse(
         """
     <!DOCTYPE html>
@@ -223,67 +228,87 @@ async def get():
                 color: #ccc;
                 margin-top: 10px;
             }
+            .update-info {
+                text-align: center;
+                margin-top: 20px;
+                font-size: 12px;
+                color: #ccc;
+            }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🚀 Crypto Price WebSocket Client</h1>
+            <h1>🚀 Crypto Price Dashboard</h1>
             <div id="status" class="disconnected">Connecting...</div>
             <div id="prices"></div>
+            <div class="update-info">
+                📡 Polling API (Updates every 2 seconds)
+            </div>
         </div>
 
         <script>
-            const ws = new WebSocket('ws://' + window.location.host + '/ws');
             const statusDiv = document.getElementById('status');
             const pricesDiv = document.getElementById('prices');
+            let isConnected = true;
 
-            ws.onopen = function() {
-                statusDiv.textContent = '✓ Connected to WebSocket Server';
-                statusDiv.className = 'connected';
-                console.log('WebSocket connected');
-            };
+            async function fetchPrices() {
+                try {
+                    const response = await fetch('/price');
+                    
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    
+                    const data = await response.json();
+                    
+                    // Update status
+                    if (!isConnected) {
+                        isConnected = true;
+                        statusDiv.textContent = '✓ Connected to API (Polling every 2s)';
+                        statusDiv.className = 'connected';
+                    }
+                    
+                    // Update prices
+                    const prices = data.latest_prices || {};
+                    for (const [symbol, priceData] of Object.entries(prices)) {
+                        let priceCard = document.getElementById('card-' + symbol);
+                        
+                        if (!priceCard) {
+                            priceCard = document.createElement('div');
+                            priceCard.id = 'card-' + symbol;
+                            priceCard.className = 'price-card';
+                            pricesDiv.appendChild(priceCard);
+                        }
 
-            ws.onmessage = function(event) {
-                const message = JSON.parse(event.data);
-                if (message.type === 'price_update') {
-                    const data = message.data;
-                    updatePriceDisplay(data);
+                        const change = parseFloat(priceData['24h_change']);
+                        const changeClass = change >= 0 ? 'positive' : 'negative';
+                        const changeSign = change >= 0 ? '+' : '';
+
+                        priceCard.innerHTML = `
+                            <div class="symbol">${priceData.symbol}</div>
+                            <div class="price">$${parseFloat(priceData.last_price).toFixed(2)}</div>
+                            <div class="change ${changeClass}">${changeSign}${change.toFixed(2)}%</div>
+                            <div class="timestamp">Last updated: ${new Date(priceData.timestamp).toLocaleTimeString()}</div>
+                        `;
+                    }
+                    
+                } catch (error) {
+                    console.error('Error fetching prices:', error);
+                    if (isConnected) {
+                        isConnected = false;
+                        statusDiv.textContent = '✗ Connection Error - Retrying...';
+                        statusDiv.className = 'disconnected';
+                    }
                 }
-            };
-
-            ws.onerror = function(error) {
-                console.error('WebSocket error:', error);
-                statusDiv.textContent = '✗ WebSocket Error';
-                statusDiv.className = 'disconnected';
-            };
-
-            ws.onclose = function() {
-                statusDiv.textContent = '✗ Disconnected from WebSocket Server';
-                statusDiv.className = 'disconnected';
-                console.log('WebSocket disconnected');
-            };
-
-            function updatePriceDisplay(data) {
-                let priceCard = document.getElementById('card-' + data.symbol);
-                
-                if (!priceCard) {
-                    priceCard = document.createElement('div');
-                    priceCard.id = 'card-' + data.symbol;
-                    priceCard.className = 'price-card';
-                    pricesDiv.appendChild(priceCard);
-                }
-
-                const change = parseFloat(data['24h_change']);
-                const changeClass = change >= 0 ? 'positive' : 'negative';
-                const changeSign = change >= 0 ? '+' : '';
-
-                priceCard.innerHTML = `
-                    <div class="symbol">${data.symbol}</div>
-                    <div class="price">$${parseFloat(data.last_price).toFixed(2)}</div>
-                    <div class="change ${changeClass}">${changeSign}${change.toFixed(2)}%</div>
-                    <div class="timestamp">Last updated: ${new Date(data.timestamp).toLocaleTimeString()}</div>
-                `;
             }
+
+            // Fetch immediately
+            statusDiv.textContent = '⏳ Connecting to API...';
+            statusDiv.className = 'disconnected';
+            fetchPrices();
+            
+            // Then poll every 2 seconds
+            const pollInterval = setInterval(fetchPrices, 2000);
         </script>
     </body>
     </html>
